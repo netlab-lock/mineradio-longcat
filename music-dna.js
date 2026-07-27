@@ -1,59 +1,13 @@
 // ====================================================================
 //  音乐 DNA 画像引擎 — 分析用户听歌历史，生成品味画像
 // ====================================================================
-const { spawn } = require('child_process');
-const path = require('path');
-
-const HERMES_CLI = '/home/atios/.local/bin/hermes';
-const TIMEOUT_MS = 30000;
-
-function callLongCat(prompt, maxTokens = 512) {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    const proc = spawn(HERMES_CLI, ['-z', prompt], {
-      timeout: TIMEOUT_MS,
-      env: process.env,
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr.on('data', (data) => { stderr += data.toString(); });
-
-    proc.on('close', (code) => {
-      const elapsed = Date.now() - startTime;
-      if (code !== 0) {
-        console.error(`[MusicDNA] 退出码 ${code}, 耗时 ${elapsed}ms`);
-        reject(new Error(`LongCat 调用失败 (exit ${code})`));
-        return;
-      }
-      const result = stdout.trim();
-      if (!result) { reject(new Error('LongCat 返回空结果')); return; }
-      console.log(`[MusicDNA] 完成, 耗时 ${elapsed}ms`);
-      resolve(result);
-    });
-
-    proc.on('error', (err) => {
-      console.error('[MusicDNA] 进程错误:', err.message);
-      reject(err);
-    });
-  });
-}
-
-function parseJSON(text) {
-  try { return JSON.parse(text); } catch {}
-  const codeBlock = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (codeBlock) { try { return JSON.parse(codeBlock[1].trim()); } catch {} }
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) { try { return JSON.parse(jsonMatch[0]); } catch {} }
-  return null;
-}
+const { callLongCatCached, parseJSON, sanitizeInput } = require('./longcat-client');
 
 // 分析听歌历史，生成 DNA 画像
 async function generateMusicDNA(listenHistory) {
-  // listenHistory: [{ name, artist, album, duration, timestamp, genre }]
-  const totalSongs = listenHistory.length;
+  // 限制历史记录数量，避免 prompt 过长
+  const history = (listenHistory || []).slice(-50);
+  const totalSongs = history.length;
 
   if (totalSongs === 0) {
     return getEmptyDNA();
@@ -65,7 +19,8 @@ async function generateMusicDNA(listenHistory) {
   const hourDistribution = new Array(24).fill(0);
   let totalDuration = 0;
 
-  listenHistory.forEach(song => {
+  history.forEach(song => {
+    if (!song || !song.artist) return;
     artistCount[song.artist] = (artistCount[song.artist] || 0) + 1;
     nameCount[song.name] = (nameCount[song.name] || 0) + 1;
     totalDuration += song.duration || 0;
@@ -134,8 +89,11 @@ async function generateMusicDNA(listenHistory) {
 
 只输出 JSON，不要其他内容。`;
 
+  // 缓存 key 基于统计数据
+  const cacheKey = `dna:${totalSongs}:${summaryData.uniqueArtists}:${summaryData.topArtists}`;
+
   try {
-    const raw = await callLongCat(prompt, 512);
+    const raw = await callLongCatCached(cacheKey, prompt, 512, 'MusicDNA');
     const parsed = parseJSON(raw);
 
     if (!parsed) {
@@ -146,12 +104,12 @@ async function generateMusicDNA(listenHistory) {
     return {
       source: 'longcat',
       ...summaryData,
-      title: parsed.title || '音乐探索者',
-      description: parsed.description || '你有着独特的音乐品味',
-      traits: Array.isArray(parsed.traits) ? parsed.traits : generateDefaultTraits(),
-      emoji: parsed.emoji || '🎵',
-      color: parsed.color || '#00F5D4',
-      recommend_genre: parsed.recommend_genre || '独立音乐',
+      title: sanitizeInput(parsed.title, 20) || '音乐探索者',
+      description: sanitizeInput(parsed.description, 200) || '你有着独特的音乐品味',
+      traits: Array.isArray(parsed.traits) ? parsed.traits.slice(0, 4) : generateDefaultTraits(),
+      emoji: sanitizeInput(parsed.emoji, 10) || '🎵',
+      color: sanitizeInput(parsed.color, 10) || '#00F5D4',
+      recommend_genre: sanitizeInput(parsed.recommend_genre, 50) || '独立音乐',
       generatedAt: Date.now(),
     };
   } catch (err) {

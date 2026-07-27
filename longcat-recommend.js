@@ -2,81 +2,7 @@
 //  LongCat 智能推荐引擎
 //  根据天气 + 用户状态 + 听歌历史生成个性化推荐
 // ====================================================================
-const { spawn } = require('child_process');
-const path = require('path');
-
-const HERMES_CLI = '/home/atios/.local/bin/hermes';
-const TIMEOUT_MS = 30000;
-
-// 调用 LongCat (通过 hermes CLI)
-function callLongCat(prompt, maxTokens = 512) {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    const proc = spawn(HERMES_CLI, ['-z', prompt], {
-      timeout: TIMEOUT_MS,
-      env: process.env,
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    proc.on('close', (code) => {
-      const elapsed = Date.now() - startTime;
-      if (code !== 0) {
-        console.error(`[LongCat] 退出码 ${code}, 耗时 ${elapsed}ms`);
-        if (stderr) console.error('[LongCat stderr]', stderr.slice(0, 200));
-        reject(new Error(`LongCat 调用失败 (exit ${code})`));
-        return;
-      }
-      const result = stdout.trim();
-      if (!result) {
-        reject(new Error('LongCat 返回空结果'));
-        return;
-      }
-      console.log(`[LongCat] 完成, 耗时 ${elapsed}ms, 输出 ${result.length} 字`);
-      resolve(result);
-    });
-
-    proc.on('error', (err) => {
-      console.error('[LongCat] 进程错误:', err.message);
-      reject(err);
-    });
-  });
-}
-
-// 从 LongCat 输出中解析 JSON
-function parseJSON(text) {
-  // 尝试直接解析
-  try {
-    return JSON.parse(text);
-  } catch {}
-
-  // 尝试从 markdown code block 中提取
-  const codeBlock = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (codeBlock) {
-    try {
-      return JSON.parse(codeBlock[1].trim());
-    } catch {}
-  }
-
-  // 尝试找到第一个 { 到最后一个 }
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch {}
-  }
-
-  return null;
-}
+const { callLongCatCached, parseJSON, sanitizeInput } = require('./longcat-client');
 
 // 生成智能推荐
 async function generateSmartRecommend(weather, userState = {}) {
@@ -115,7 +41,7 @@ async function generateSmartRecommend(weather, userState = {}) {
 - 昼夜: ${isDay ? '白天' : '夜晚'}
 
 ## 用户画像
-- 用户名: ${userName}
+- 用户名: ${sanitizeInput(userName, 50)}
 - 累计听歌: ${listenCount} 首
 - 偏好风格: ${favoriteGenres.length > 0 ? favoriteGenres.join('、') : '未知'}
 
@@ -141,8 +67,11 @@ ${recentSongText}
 
 只输出 JSON，不要其他内容。`;
 
+  // 缓存 key 基于天气参数
+  const cacheKey = `recommend:${weatherLabel}:${temperature}:${humidity}:${isDay}`;
+
   try {
-    const raw = await callLongCat(prompt, 512);
+    const raw = await callLongCatCached(cacheKey, prompt, 512, 'Recommend');
     const parsed = parseJSON(raw);
 
     if (!parsed) {
@@ -152,19 +81,24 @@ ${recentSongText}
 
     return {
       source: 'longcat',
-      mood_analysis: parsed.mood_analysis || '环境分析中...',
-      energy: parsed.energy ?? 0.5,
-      warmth: parsed.warmth ?? 0.5,
-      focus: parsed.focus ?? 0.5,
-      melancholy: parsed.melancholy ?? 0.3,
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 5) : ['流行', '热门'],
-      recommendation: parsed.recommendation || '为你推荐这些歌曲',
-      raw_output: raw.length < 500 ? raw : undefined,
+      mood_analysis: sanitizeInput(parsed.mood_analysis, 100),
+      energy: clamp01(parsed.energy),
+      warmth: clamp01(parsed.warmth),
+      focus: clamp01(parsed.focus),
+      melancholy: clamp01(parsed.melancholy),
+      keywords: Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 5).map(k => sanitizeInput(k, 30)) : ['流行', '热门'],
+      recommendation: sanitizeInput(parsed.recommendation, 200),
     };
   } catch (err) {
     console.error('[Recommend] LongCat 调用失败:', err.message);
     return generateFallbackRecommend(weather);
   }
+}
+
+function clamp01(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return 0.5;
+  return Math.max(0, Math.min(1, n));
 }
 
 // Fallback 推荐（当 LongCat 不可用时）
@@ -208,5 +142,4 @@ function generateFallbackRecommend(weather) {
 module.exports = {
   generateSmartRecommend,
   generateFallbackRecommend,
-  callLongCat,
 };

@@ -54,7 +54,6 @@ const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer
 const { generateSmartRecommend, generateFallbackRecommend } = require('./longcat-recommend');
 const { generateSongIntro, generatePlaylistScript, generateTransition } = require('./ai-dj');
 const { generateMusicDNA, getEmptyDNA } = require('./music-dna');
-try { require('fs').appendFileSync('/tmp/mineradio-debug.log', `[IMPORT] ai-dj.js loaded, generateSongIntro: ${typeof generateSongIntro}\n`); } catch {}
 
 // ---------- SSRF 防护：代理目标白名单 ----------
 // 正则整体锚定 ^(...)$，防止子串绕过（如 music.163.com.evil.com）
@@ -3336,7 +3335,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[SmartRecommend]', err);
       const fallback = generateFallbackRecommend({});
-      sendJSON({ ...fallback, error: safeErrorMessage(err) });
+      sendJSON(res, { ...fallback, error: safeErrorMessage(err) });
     }
     return;
   }
@@ -3345,7 +3344,6 @@ const server = http.createServer(async (req, res) => {
   // ---------- AI DJ 导播语 ----------
   // ====================================================================
   if (pn === '/api/ai-dj/intro') {
-    console.log('[AI-DJ-Intro] 路由命中');
     try {
       const songName = url.searchParams.get('song') || '';
       const artist = url.searchParams.get('artist') || '';
@@ -3353,13 +3351,11 @@ const server = http.createServer(async (req, res) => {
       const weather = url.searchParams.get('weather') || '';
       const mood = url.searchParams.get('mood') || '';
       const userName = url.searchParams.get('userName') || '听众';
-      console.log('[AI-DJ-Intro] 参数:', { songName, artist, weather, mood });
 
       const result = await generateSongIntro(
         { name: songName, artist, album },
         { weather, mood, userName }
       );
-      console.log('[AI-DJ-Intro] 结果:', result);
       sendJSON(res, result);
     } catch (err) {
       console.error('[AI-DJ-Intro]', err);
@@ -3392,10 +3388,9 @@ const server = http.createServer(async (req, res) => {
     try {
       let history = [];
       if (req.method === 'POST') {
-        // POST: 从 body 读取
         let body = '';
         await new Promise((resolve, reject) => {
-          req.on('data', chunk => { body += chunk; if (body.length > 1e6) req.destroy(); });
+          req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
           req.on('end', resolve);
           req.on('error', reject);
         });
@@ -3404,7 +3399,6 @@ const server = http.createServer(async (req, res) => {
           history = parsed.history || [];
         } catch { history = []; }
       } else {
-        // GET: 从 query 读取
         const historyParam = url.searchParams.get('history') || '[]';
         try { history = JSON.parse(historyParam); } catch { history = []; }
       }
