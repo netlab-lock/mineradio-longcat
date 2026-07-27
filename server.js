@@ -51,6 +51,10 @@ const os   = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
+const { generateSmartRecommend, generateFallbackRecommend } = require('./longcat-recommend');
+const { generateSongIntro, generatePlaylistScript, generateTransition } = require('./ai-dj');
+const { generateMusicDNA, getEmptyDNA } = require('./music-dna');
+try { require('fs').appendFileSync('/tmp/mineradio-debug.log', `[IMPORT] ai-dj.js loaded, generateSongIntro: ${typeof generateSongIntro}\n`); } catch {}
 
 // ---------- SSRF 防护：代理目标白名单 ----------
 // 正则整体锚定 ^(...)$，防止子串绕过（如 music.163.com.evil.com）
@@ -2311,6 +2315,11 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pn = url.pathname;
+  if (pn.startsWith('/api/')) {
+    const logMsg = `[REQ] ${req.method} ${pn}\n`;
+    process.stdout.write(logMsg);
+    try { require('fs').appendFileSync('/tmp/mineradio-debug.log', logMsg); } catch {}
+  }
 
   // 静态资源直接返回，不走 session 也不限流（避免页面加载时 CSS/JS 被拦截）
   if (pn === '/favicon.ico') {
@@ -3303,6 +3312,92 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[QQQRCheck]', err);
       sendJSON(res, { status: 'error', error: safeErrorMessage(err) || 'QR_CHECK_FAILED' }, 500);
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- LongCat 智能推荐 ----------
+  // ====================================================================
+  if (pn === '/api/smart-recommend') {
+    try {
+      const city = url.searchParams.get('city') || 'Shanghai';
+      const userName = url.searchParams.get('userName') || '听众';
+
+      // 获取天气数据（复用现有天气电台逻辑）
+      const weatherResult = await buildWeatherRadio({ city });
+      const weatherData = {
+        ...weatherResult.weather,
+        mood: weatherResult.weather.mood || {},
+      };
+      const recommend = await generateSmartRecommend(weatherData, { userName });
+
+      sendJSON(res, recommend);
+    } catch (err) {
+      console.error('[SmartRecommend]', err);
+      const fallback = generateFallbackRecommend({});
+      sendJSON({ ...fallback, error: safeErrorMessage(err) });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- AI DJ 导播语 ----------
+  // ====================================================================
+  if (pn === '/api/ai-dj/intro') {
+    console.log('[AI-DJ-Intro] 路由命中');
+    try {
+      const songName = url.searchParams.get('song') || '';
+      const artist = url.searchParams.get('artist') || '';
+      const album = url.searchParams.get('album') || '';
+      const weather = url.searchParams.get('weather') || '';
+      const mood = url.searchParams.get('mood') || '';
+      const userName = url.searchParams.get('userName') || '听众';
+      console.log('[AI-DJ-Intro] 参数:', { songName, artist, weather, mood });
+
+      const result = await generateSongIntro(
+        { name: songName, artist, album },
+        { weather, mood, userName }
+      );
+      console.log('[AI-DJ-Intro] 结果:', result);
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[AI-DJ-Intro]', err);
+      sendJSON(res, { intro: '接下来为你播放', source: 'error' });
+    }
+    return;
+  }
+
+  if (pn === '/api/ai-dj/script') {
+    try {
+      const songsParam = url.searchParams.get('songs') || '[]';
+      const songs = JSON.parse(songsParam);
+      const weather = url.searchParams.get('weather') || '';
+      const mood = url.searchParams.get('mood') || '轻松';
+      const userName = url.searchParams.get('userName') || '听众';
+
+      const result = await generatePlaylistScript(songs, { weather, mood, userName });
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[AI-DJ-Script]', err);
+      sendJSON(res, { script: '为你准备了一份歌单', source: 'error' });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 音乐 DNA 画像 ----------
+  // ====================================================================
+  if (pn === '/api/music-dna') {
+    try {
+      const historyParam = url.searchParams.get('history') || '[]';
+      const history = JSON.parse(historyParam);
+
+      const dna = await generateMusicDNA(history);
+      sendJSON(res, dna);
+    } catch (err) {
+      console.error('[MusicDNA]', err);
+      sendJSON(res, getEmptyDNA());
     }
     return;
   }
