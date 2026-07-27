@@ -4,7 +4,7 @@
 const { spawn } = require('child_process');
 
 const HERMES_CLI = '/home/atios/.local/bin/hermes';
-const TIMEOUT_MS = 30000;
+const TIMEOUT_MS = 60000;
 
 function callLongCat(prompt, maxTokens = 512) {
   return new Promise((resolve, reject) => {

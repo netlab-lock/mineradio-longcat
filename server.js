@@ -3390,8 +3390,24 @@ const server = http.createServer(async (req, res) => {
   // ====================================================================
   if (pn === '/api/music-dna') {
     try {
-      const historyParam = url.searchParams.get('history') || '[]';
-      const history = JSON.parse(historyParam);
+      let history = [];
+      if (req.method === 'POST') {
+        // POST: 从 body 读取
+        let body = '';
+        await new Promise((resolve, reject) => {
+          req.on('data', chunk => { body += chunk; if (body.length > 1e6) req.destroy(); });
+          req.on('end', resolve);
+          req.on('error', reject);
+        });
+        try {
+          const parsed = JSON.parse(body);
+          history = parsed.history || [];
+        } catch { history = []; }
+      } else {
+        // GET: 从 query 读取
+        const historyParam = url.searchParams.get('history') || '[]';
+        try { history = JSON.parse(historyParam); } catch { history = []; }
+      }
 
       const dna = await generateMusicDNA(history);
       sendJSON(res, dna);
