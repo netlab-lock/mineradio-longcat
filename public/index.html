@@ -28251,6 +28251,193 @@ setTimeout(connectMineradioWS, 2000);
 
 // 初始化：加载听歌历史
 loadListenHistory();
+
+// ========== 高级 AI 功能 ==========
+
+// 自然语言搜索
+async function doNLSearch() {
+  const input = document.getElementById('nl-search-input');
+  if (!input || !input.value.trim()) return;
+
+  const query = input.value.trim();
+  const weather = homeWeatherRadioState?.weather?.label || '';
+  const mood = homeWeatherRadioState?.weather?.mood?.title || '';
+
+  showAiDjBullet('🔍 正在理解你的需求...', 2000);
+
+  try {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('weather', weather);
+    params.set('mood', mood);
+    const resp = await fetchWithTimeout('/api/nl-search?' + params.toString(), {}, 30000);
+    const data = await resp.json();
+
+    if (data.keywords && data.keywords.length > 0) {
+      showAiDjBullet('💡 ' + (data.reason || '为你找到这些关键词'), 3000);
+      // 用第一个关键词搜索
+      setTimeout(() => searchKeyword(data.keywords[0]), 1000);
+    } else {
+      showAiDjBullet('🤔 没能理解，试试其他说法', 2000);
+    }
+  } catch (err) {
+    showAiDjBullet('❌ 搜索失败: ' + err.message, 2000);
+  }
+}
+
+// 歌词分析
+async function doLyricAnalysis() {
+  const song = playQueue && playQueue[currentIdx];
+  if (!song || !song.name) {
+    showAiDjBullet('⚠️ 先播放一首歌吧', 2000);
+    return;
+  }
+
+  showAiDjBullet('📝 正在分析歌词...', 2000);
+
+  try {
+    // 获取歌词
+    const lyricResp = await fetchWithTimeout('/api/lyric?id=' + encodeURIComponent(song.id || ''), {}, 10000);
+    const lyricData = await lyricResp.json();
+    const lyric = lyricData.lyric || lyricData.lrc?.lyric || '';
+
+    if (!lyric) {
+      showAiDjBullet('⚠️ 暂无歌词', 2000);
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set('lyric', lyric.slice(0, 2000));
+    params.set('songInfo', JSON.stringify({ name: song.name, artist: song.artist }));
+
+    const resp = await fetchWithTimeout('/api/analyze-lyric?' + params.toString(), {}, 30000);
+    const data = await resp.json();
+
+    if (data.summary) {
+      showAiDjBullet('🎵 ' + data.summary + ' —— ' + data.comment, 5000);
+    } else {
+      showAiDjBullet('🤔 歌词分析中...', 2000);
+    }
+  } catch (err) {
+    showAiDjBullet('❌ 分析失败: ' + err.message, 2000);
+  }
+}
+
+// 智能播放列表
+async function doSmartPlaylist() {
+  const scenarios = ['深夜学习', '运动健身', '雨天', '旅行', '睡前放松', '通勤路上', '下午茶', '派对'];
+  const scenario = scenarios[Math.floor(Math.random() * scenarios.length)];
+
+  showAiDjBullet('🎶 正在生成「' + scenario + '」歌单...', 2000);
+
+  try {
+    const weather = homeWeatherRadioState?.weather?.label || '';
+    const mood = homeWeatherRadioState?.weather?.mood?.title || '';
+
+    const params = new URLSearchParams();
+    params.set('scenario', scenario);
+    params.set('count', '8');
+    params.set('weather', weather);
+    params.set('mood', mood);
+
+    const resp = await fetchWithTimeout('/api/smart-playlist?' + params.toString(), {}, 30000);
+    const data = await resp.json();
+
+    if (data.songs && data.songs.length > 0) {
+      showAiDjBullet('🎵 ' + data.title + ' —— ' + data.description, 4000);
+    } else {
+      showAiDjBullet('🤔 歌单生成中...', 2000);
+    }
+  } catch (err) {
+    showAiDjBullet('❌ 生成失败: ' + err.message, 2000);
+  }
+}
+
+// 音乐问答游戏
+let currentQuiz = null;
+let quizAnswered = false;
+
+async function doMusicQuiz() {
+  if (quizAnswered && currentQuiz) {
+    // 显示答案后，加载下一题
+    currentQuiz = null;
+    quizAnswered = false;
+  }
+
+  if (!currentQuiz) {
+    showAiDjBullet('🎮 准备音乐问答...', 1500);
+    try {
+      const resp = await fetchWithTimeout('/api/music-quiz?difficulty=medium', {}, 30000);
+      currentQuiz = await resp.json();
+      quizAnswered = false;
+    } catch (err) {
+      showAiDjBullet('❌ 加载失败', 2000);
+      return;
+    }
+  }
+
+  if (currentQuiz) {
+    const options = currentQuiz.options.map((opt, i) =>
+      String.fromCharCode(65 + i) + '. ' + opt
+    ).join(' | ');
+    showAiDjBullet('❓ ' + currentQuiz.question + '\n' + options, 8000);
+  }
+}
+
+// 听歌时间轴
+async function doTimelineStats() {
+  showAiDjBullet('📊 正在统计听歌数据...', 2000);
+
+  try {
+    const params = new URLSearchParams();
+    params.set('history', JSON.stringify(listenHistory));
+
+    const resp = await fetchWithTimeout('/api/timeline-stats?' + params.toString(), {}, 10000);
+    const data = await resp.json();
+
+    if (data.totalSongs > 0) {
+      const topArtist = data.byArtist[0];
+      const msg = '📈 累计 ' + data.totalSongs + ' 首 · ' + data.totalMinutes + ' 分钟' +
+        (topArtist ? '\n🎤 最爱: ' + topArtist.name + ' (' + data.byArtist[0].count + '次)' : '') +
+        (data.streaks > 1 ? '\n🔥 连续 ' + data.streaks + ' 天听歌' : '');
+      showAiDjBullet(msg, 5000);
+    } else {
+      showAiDjBullet('📊 还没有听歌记录', 2000);
+    }
+  } catch (err) {
+    showAiDjBullet('❌ 统计失败', 2000);
+  }
+}
+
+// 添加 AI 功能按钮到面板
+function addAiFeatureButtons() {
+  const content = document.getElementById('ai-panel-content');
+  if (!content) return;
+
+  // 检查是否已添加
+  if (document.getElementById('ai-feature-buttons')) return;
+
+  const buttonsHtml = `
+    <div id="ai-feature-buttons" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:12px;">
+      <button onclick="doNLSearch()" style="padding:8px;border:none;border-radius:8px;background:rgba(0,245,212,0.08);border:1px solid rgba(0,245,212,0.15);color:rgba(0,245,212,0.8);font-size:11px;cursor:pointer;transition:all 0.2s;">🔍 自然语言</button>
+      <button onclick="doLyricAnalysis()" style="padding:8px;border:none;border-radius:8px;background:rgba(0,245,212,0.08);border:1px solid rgba(0,245,212,0.15);color:rgba(0,245,212,0.8);font-size:11px;cursor:pointer;transition:all 0.2s;">📝 歌词分析</button>
+      <button onclick="doSmartPlaylist()" style="padding:8px;border:none;border-radius:8px;background:rgba(0,245,212,0.08);border:1px solid rgba(0,245,212,0.15);color:rgba(0,245,212,0.8);font-size:11px;cursor:pointer;transition:all 0.2s;">🎶 智能歌单</button>
+      <button onclick="doMusicQuiz()" style="padding:8px;border:none;border-radius:8px;background:rgba(0,245,212,0.08);border:1px solid rgba(0,245,212,0.15);color:rgba(0,245,212,0.8);font-size:11px;cursor:pointer;transition:all 0.2s;">🎮 音乐问答</button>
+      <button onclick="doTimelineStats()" style="padding:8px;border:none;border-radius:8px;background:rgba(0,245,212,0.08);border:1px solid rgba(0,245,212,0.15);color:rgba(0,245,212,0.8);font-size:11px;cursor:pointer;transition:all 0.2s;">📊 时间轴</button>
+      <button onclick="switchAiTab('dna')" style="padding:8px;border:none;border-radius:8px;background:rgba(107,91,149,0.12);border:1px solid rgba(107,91,149,0.2);color:rgba(107,91,149,0.9);font-size:11px;cursor:pointer;transition:all 0.2s;">🧬 DNA</button>
+    </div>
+  `;
+
+  content.insertAdjacentHTML('beforeend', buttonsHtml);
+}
+
+// 面板加载完成后添加功能按钮
+const originalLoadAiRecommend = loadAiRecommend;
+loadAiRecommend = async function() {
+  await originalLoadAiRecommend();
+  addAiFeatureButtons();
+};
+
 </script>
 </body>
 </html>

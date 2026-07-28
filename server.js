@@ -54,6 +54,7 @@ const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer
 const { generateSmartRecommend, generateFallbackRecommend } = require('./longcat-recommend');
 const { generateSongIntro, generatePlaylistScript, generateTransition } = require('./ai-dj');
 const { generateMusicDNA, getEmptyDNA } = require('./music-dna');
+const { naturalLanguageSearch, analyzeLyrics, generateSmartPlaylist, generateMusicQuiz, generateTimelineStats } = require('./advanced-ai');
 
 // ---------- SSRF 防护：代理目标白名单 ----------
 // 正则整体锚定 ^(...)$，防止子串绕过（如 music.163.com.evil.com）
@@ -3408,6 +3409,105 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('[MusicDNA]', err);
       sendJSON(res, getEmptyDNA());
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 自然语言点歌 ----------
+  // ====================================================================
+  if (pn === '/api/nl-search') {
+    try {
+      const query = url.searchParams.get('q') || '';
+      const weather = url.searchParams.get('weather') || '';
+      const mood = url.searchParams.get('mood') || '';
+      const result = await naturalLanguageSearch(query, { weather, mood });
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[NLSearch]', err);
+      sendJSON(res, { keywords: [url.searchParams.get('q') || ''], tags: [], reason: '', source: 'error' });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 歌词分析 ----------
+  // ====================================================================
+  if (pn === '/api/analyze-lyric') {
+    try {
+      let lyric = '';
+      let songInfo = {};
+      if (req.method === 'POST') {
+        let body = '';
+        await new Promise((resolve, reject) => {
+          req.on('data', chunk => { body += chunk; if (body.length > 50000) req.destroy(); });
+          req.on('end', resolve);
+          req.on('error', reject);
+        });
+        try {
+          const parsed = JSON.parse(body);
+          lyric = parsed.lyric || '';
+          songInfo = parsed.songInfo || {};
+        } catch { /* ignore */ }
+      } else {
+        lyric = url.searchParams.get('lyric') || '';
+        try { songInfo = JSON.parse(url.searchParams.get('songInfo') || '{}'); } catch { /* ignore */ }
+      }
+      const result = await analyzeLyrics(lyric, songInfo);
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[Lyric]', err);
+      sendJSON(res, { summary: '', sentiment: 'neutral', keywords: [], comment: '', source: 'error' });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 智能播放列表生成 ----------
+  // ====================================================================
+  if (pn === '/api/smart-playlist') {
+    try {
+      const scenario = url.searchParams.get('scenario') || '';
+      const count = Math.min(Math.max(parseInt(url.searchParams.get('count')) || 8, 3), 15);
+      const weather = url.searchParams.get('weather') || '';
+      const mood = url.searchParams.get('mood') || '';
+      const result = await generateSmartPlaylist(scenario, { count, weather, mood });
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[Playlist]', err);
+      sendJSON(res, { title: '歌单', description: '', songs: [], source: 'error' });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 音乐知识问答 ----------
+  // ====================================================================
+  if (pn === '/api/music-quiz') {
+    try {
+      const difficulty = url.searchParams.get('difficulty') || 'medium';
+      const result = await generateMusicQuiz(difficulty);
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[Quiz]', err);
+      sendJSON(res, { question: '', options: [], answer: 0, explanation: '', type: '', source: 'error' });
+    }
+    return;
+  }
+
+  // ====================================================================
+  // ---------- 听歌时间轴统计 ----------
+  // ====================================================================
+  if (pn === '/api/timeline-stats') {
+    try {
+      let history = [];
+      const historyParam = url.searchParams.get('history') || '[]';
+      try { history = JSON.parse(historyParam); } catch { /* ignore */ }
+      const result = generateTimelineStats(history);
+      sendJSON(res, result);
+    } catch (err) {
+      console.error('[Timeline]', err);
+      sendJSON(res, { totalSongs: 0, totalMinutes: 0, byHour: [], byDay: [], byArtist: [], streaks: 0, source: 'error' });
     }
     return;
   }
